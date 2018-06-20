@@ -43,21 +43,18 @@ class Loader
     protected $formats = [];
     protected $tests = [];
     protected $path;
+    protected $instancePath;
 
     public function __construct(array $suiteSettings)
     {
         $this->path = $suiteSettings['path'];
+        $this->instancePath = (isset($suiteSettings['instancePath']) ? $suiteSettings['instancePath'] : null);
         $this->formats = [
             new CeptLoader(),
             new CestLoader(),
             new UnitLoader(),
             new GherkinLoader($suiteSettings)
         ];
-        if (isset($suiteSettings['formats'])) {
-            foreach ($suiteSettings['formats'] as $format) {
-                $this->formats[] = new $format($suiteSettings);
-            }
-        }
     }
 
     public function getTests()
@@ -84,8 +81,11 @@ class Loader
 
     protected function makePath($originalPath)
     {
-        $path = $this->path . $this->relativeName($originalPath);
-
+        $relativeName = $this->relativeName($originalPath);
+        $path = $this->path . $this->instancePath . $relativeName;
+        if(!file_exists($newPath = $this->findPath($path))) {
+            $path = $this->path . $relativeName;
+        }
         if (file_exists($newPath = $this->findPath($path))
             || file_exists($newPath = $this->findPath(getcwd() . "/{$originalPath}"))
         ) {
@@ -127,14 +127,33 @@ class Loader
         if ($fileName) {
             return $this->loadTest($fileName);
         }
+        $instanceTestFiles = [];
+        //Check if instance path is available
+        if(is_dir($this->path . $this->instancePath)) {
+            //If instance path is available then load all tests that are available there
+            $localFinder = Finder::create()->files()->sortByName()->in($this->path . $this->instancePath)->followLinks();
 
+            foreach ($this->formats as $format) {
+                /** @var $format Loader  **/
+                $formatFinder = clone($localFinder);
+                $testFiles = $formatFinder->name($format->getPattern());
+                foreach ($testFiles as $test) {
+                    $instanceTestFiles [] = $test->getFilename();
+                    $pathname = str_replace(["//", "\\\\"], ["/", "\\"], $test->getPathname());
+                    $format->loadTests($pathname);
+                }
+                $this->tests = array_merge($this->tests, $format->getTests());
+            }
+        }
         $finder = Finder::create()->files()->sortByName()->in($this->path)->followLinks();
-
         foreach ($this->formats as $format) {
-            /** @var $format Loader  **/
+            /** @var $format Loader  * */
             $formatFinder = clone($finder);
             $testFiles = $formatFinder->name($format->getPattern());
             foreach ($testFiles as $test) {
+                if (in_array($test->getFilename(), $instanceTestFiles)) {
+                    continue;
+                }
                 $pathname = str_replace(["//", "\\\\"], ["/", "\\"], $test->getPathname());
                 $format->loadTests($pathname);
             }
